@@ -1,7 +1,6 @@
 # Registro de decisión arquitectónica (ADR) y matriz comparativa
 
-> **Estado:** borrador. Solo se tuvo acceso a la propuesta individual de Gregorio Carvajal. Las columnas de los otros
-> integrantes están vacías y deben completarlas ellos antes de entregar el informe.
+> Pendiente: completar las columnas de los demás integrantes (solo está la propuesta de Gregorio Carvajal).
 
 ## 1. Decisión
 
