@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+# secretos y certificados: NUNCA a git
+deploy/.env
+deploy/aws/.env.vm
+deploy/certs/
+certs/
+*.key
+# artefactos de ejecución
+run/
+work/
+data/
+results/
+*.part
+.dfsha/
