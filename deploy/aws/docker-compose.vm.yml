@@ -1,0 +1,73 @@
+# DFSha en VM de AWS Academy: este archivo se ejecuta en CADA una de VM-1, VM-2 y VM-3.
+# Cada VM corre 3 contenedores separados: etcd-i, control-i y un nodo de datos (dn-i).
+# VM-4 solo ejecuta el cliente (ver docs/DESPLIEGUE_AWS.md).
+#
+# Se usa red "host": los contenedores usan directamente las IPs privadas de la VM, que es lo que
+# los certificados (SAN) y los registros dinámicos de nodos esperan. Sin traducción de puertos.
+#
+# Variables (archivo deploy/aws/.env.vm, ver .env.vm.example):
+#   NODE_INDEX (1|2|3)  VM_IP (IP privada de ESTA VM)  IP1 IP2 IP3 (IPs privadas de las tres VM)
+#   DFSHA_JWT_SECRET DFSHA_CAP_KEY DFSHA_ADMIN_PASSWORD  (IGUALES en las tres VM)
+#   DFSHA_MASTER_KEY  (DISTINTA en cada VM: clave de cifrado en reposo del nodo de datos)
+#
+# Puertos:  etcd 2379/2380 · control 443 (clientes) y 4431 (mTLS) · nodo de datos 8443 (clientes) y 8444 (mTLS)
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.17
+    network_mode: host
+    restart: unless-stopped
+    volumes: ["../certs:/certs:ro", "etcd-data:/data"]
+    command: >
+      etcd --name etcd${NODE_INDEX} --data-dir /data
+      --listen-client-urls https://${VM_IP}:2379 --advertise-client-urls https://${VM_IP}:2379
+      --listen-peer-urls https://${VM_IP}:2380 --initial-advertise-peer-urls https://${VM_IP}:2380
+      --initial-cluster etcd1=https://${IP1}:2380,etcd2=https://${IP2}:2380,etcd3=https://${IP3}:2380
+      --initial-cluster-token dfsha --initial-cluster-state new
+      --cert-file /certs/etcd${NODE_INDEX}.crt --key-file /certs/etcd${NODE_INDEX}.key --client-cert-auth --trusted-ca-file /certs/ca.crt
+      --peer-cert-file /certs/etcd${NODE_INDEX}.crt --peer-key-file /certs/etcd${NODE_INDEX}.key --peer-client-cert-auth --peer-trusted-ca-file /certs/ca.crt
+
+  control:
+    build: { context: ../.., dockerfile: deploy/Dockerfile }
+    image: dfsha
+    network_mode: host
+    restart: unless-stopped
+    command: python -m control.main
+    volumes: ["../certs:/certs:ro"]
+    depends_on: [etcd]
+    environment:
+      DFSHA_INSTANCE_ID: control${NODE_INDEX}
+      DFSHA_ETCD: https://${IP1}:2379,https://${IP2}:2379,https://${IP3}:2379
+      DFSHA_PUBLIC_PORT: "443"
+      DFSHA_INTERNAL_PORT: "4431"
+      DFSHA_JWT_SECRET: ${DFSHA_JWT_SECRET}
+      DFSHA_CAP_KEY: ${DFSHA_CAP_KEY}
+      DFSHA_ADMIN_PASSWORD: ${DFSHA_ADMIN_PASSWORD}
+      DFSHA_TLS: "on"
+      DFSHA_TLS_CA: /certs/ca.crt
+      DFSHA_TLS_CERT: /certs/control${NODE_INDEX}.crt
+      DFSHA_TLS_KEY: /certs/control${NODE_INDEX}.key
+
+  datanode:
+    build: { context: ../.., dockerfile: deploy/Dockerfile }
+    image: dfsha
+    network_mode: host
+    restart: unless-stopped
+    command: python -m datanode.main
+    volumes: ["../certs:/certs:ro", "dn-data:/data"]
+    depends_on: [control]
+    environment:
+      DFSHA_NODE_ID: dn-${NODE_INDEX}
+      DFSHA_ADVERTISE_HOST: ${VM_IP}
+      DFSHA_PUBLIC_PORT: "8443"
+      DFSHA_INTERNAL_PORT: "8444"
+      DFSHA_DATA_DIR: /data
+      DFSHA_CONTROL_INTERNAL: https://${IP1}:4431,https://${IP2}:4431,https://${IP3}:4431
+      DFSHA_CAP_KEY: ${DFSHA_CAP_KEY}
+      DFSHA_MASTER_KEY: ${DFSHA_MASTER_KEY}
+      DFSHA_TLS: "on"
+      DFSHA_TLS_CA: /certs/ca.crt
+      DFSHA_TLS_CERT: /certs/dn${NODE_INDEX}.crt
+      DFSHA_TLS_KEY: /certs/dn${NODE_INDEX}.key
+
+volumes: { etcd-data: {}, dn-data: {} }
