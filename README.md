@@ -1,8 +1,8 @@
 # DFSha · Fase II (grupal): sistema de archivos distribuido
 
 Prototipo **ejecutable y distribuido** de DFSha con la **Opción 1: cliente/servidor con servicio distribuido entre
-servidores (S2S) en red privada**, basado en el diseño de la Fase I de Gregorio Carvajal (ver `docs/DECISIONES.md`
-para los cambios respecto a ese diseño).
+servidores (S2S) en red privada**, resultado del consenso entre los diseños individuales de la Fase I (ver `docs/DECISIONES.md`
+para la comparación y los cambios de implementación).
 
 ## 1. Qué hace
 
