@@ -1,0 +1,136 @@
+# DFSha completo en UNA máquina (desarrollo y demo rápida):
+#   3 × etcd (Raft)  +  3 × control  +  3 × nodo de datos  +  1 × contenedor cliente
+# Cada pieza es un contenedor/proceso separado que se comunica por red, con TLS 1.3 y mTLS.
+#
+# Pasos:
+#   bash deploy/gen_certs.sh deploy/certs        # CA y certificados (una vez)
+#   bash deploy/gen_secrets.sh                   # deploy/.env con los secretos (una vez)
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
+#   docker compose -f deploy/docker-compose.yml exec client python -m client login admin
+# (para el despliegue en 4 VM de AWS Academy vea deploy/aws/docker-compose.vm.yml)
+
+x-etcd: &etcd
+  image: quay.io/coreos/etcd:v3.5.17
+  restart: unless-stopped
+  volumes: ["./certs:/certs:ro"]
+
+x-app: &app
+  build: { context: .., dockerfile: deploy/Dockerfile }
+  image: dfsha
+  restart: unless-stopped
+  volumes: ["./certs:/certs:ro"]
+  environment: &appenv
+    DFSHA_TLS: "on"
+    DFSHA_TLS_CA: /certs/ca.crt
+    DFSHA_CAP_KEY: ${DFSHA_CAP_KEY}
+
+x-control-env: &controlenv
+  <<: *appenv
+  DFSHA_ETCD: https://etcd1:2379,https://etcd2:2379,https://etcd3:2379
+  DFSHA_JWT_SECRET: ${DFSHA_JWT_SECRET}
+  DFSHA_ADMIN_PASSWORD: ${DFSHA_ADMIN_PASSWORD}
+  DFSHA_PUBLIC_PORT: "4430"
+  DFSHA_INTERNAL_PORT: "4431"
+
+x-node-env: &nodeenv
+  <<: *appenv
+  DFSHA_CONTROL_INTERNAL: https://control1:4431,https://control2:4431,https://control3:4431
+  DFSHA_PUBLIC_PORT: "8443"
+  DFSHA_INTERNAL_PORT: "8444"
+  DFSHA_DATA_DIR: /data
+
+services:
+  # ------------------------------------------------------------------ etcd (3 miembros)
+  etcd1: &etcd1
+    <<: *etcd
+    hostname: etcd1
+    volumes: ["./certs:/certs:ro", "etcd1:/data"]
+    command: >
+      etcd --name etcd1 --data-dir /data
+      --listen-client-urls https://0.0.0.0:2379 --advertise-client-urls https://etcd1:2379
+      --listen-peer-urls https://0.0.0.0:2380 --initial-advertise-peer-urls https://etcd1:2380
+      --initial-cluster etcd1=https://etcd1:2380,etcd2=https://etcd2:2380,etcd3=https://etcd3:2380
+      --initial-cluster-token dfsha --initial-cluster-state new
+      --cert-file /certs/etcd1.crt --key-file /certs/etcd1.key --client-cert-auth --trusted-ca-file /certs/ca.crt
+      --peer-cert-file /certs/etcd1.crt --peer-key-file /certs/etcd1.key --peer-client-cert-auth --peer-trusted-ca-file /certs/ca.crt
+  etcd2:
+    <<: *etcd
+    hostname: etcd2
+    volumes: ["./certs:/certs:ro", "etcd2:/data"]
+    command: >
+      etcd --name etcd2 --data-dir /data
+      --listen-client-urls https://0.0.0.0:2379 --advertise-client-urls https://etcd2:2379
+      --listen-peer-urls https://0.0.0.0:2380 --initial-advertise-peer-urls https://etcd2:2380
+      --initial-cluster etcd1=https://etcd1:2380,etcd2=https://etcd2:2380,etcd3=https://etcd3:2380
+      --initial-cluster-token dfsha --initial-cluster-state new
+      --cert-file /certs/etcd2.crt --key-file /certs/etcd2.key --client-cert-auth --trusted-ca-file /certs/ca.crt
+      --peer-cert-file /certs/etcd2.crt --peer-key-file /certs/etcd2.key --peer-client-cert-auth --peer-trusted-ca-file /certs/ca.crt
+  etcd3:
+    <<: *etcd
+    hostname: etcd3
+    volumes: ["./certs:/certs:ro", "etcd3:/data"]
+    command: >
+      etcd --name etcd3 --data-dir /data
+      --listen-client-urls https://0.0.0.0:2379 --advertise-client-urls https://etcd3:2379
+      --listen-peer-urls https://0.0.0.0:2380 --initial-advertise-peer-urls https://etcd3:2380
+      --initial-cluster etcd1=https://etcd1:2380,etcd2=https://etcd2:2380,etcd3=https://etcd3:2380
+      --initial-cluster-token dfsha --initial-cluster-state new
+      --cert-file /certs/etcd3.crt --key-file /certs/etcd3.key --client-cert-auth --trusted-ca-file /certs/ca.crt
+      --peer-cert-file /certs/etcd3.crt --peer-key-file /certs/etcd3.key --peer-client-cert-auth --peer-trusted-ca-file /certs/ca.crt
+
+  # ------------------------------------------------------------------ servicio de control (3 instancias)
+  control1:
+    <<: *app
+    hostname: control1
+    command: python -m control.main
+    environment: { <<: *controlenv, DFSHA_INSTANCE_ID: control1, DFSHA_TLS_CERT: /certs/control1.crt, DFSHA_TLS_KEY: /certs/control1.key }
+    depends_on: [etcd1, etcd2, etcd3]
+  control2:
+    <<: *app
+    hostname: control2
+    command: python -m control.main
+    environment: { <<: *controlenv, DFSHA_INSTANCE_ID: control2, DFSHA_TLS_CERT: /certs/control2.crt, DFSHA_TLS_KEY: /certs/control2.key }
+    depends_on: [etcd1, etcd2, etcd3]
+  control3:
+    <<: *app
+    hostname: control3
+    command: python -m control.main
+    environment: { <<: *controlenv, DFSHA_INSTANCE_ID: control3, DFSHA_TLS_CERT: /certs/control3.crt, DFSHA_TLS_KEY: /certs/control3.key }
+    depends_on: [etcd1, etcd2, etcd3]
+
+  # ------------------------------------------------------------------ nodos de datos (3)
+  dn1:
+    <<: *app
+    hostname: dn1
+    command: python -m datanode.main
+    volumes: ["./certs:/certs:ro", "dn1:/data"]
+    environment: { <<: *nodeenv, DFSHA_NODE_ID: dn-a, DFSHA_ADVERTISE_HOST: dn1, DFSHA_MASTER_KEY: "${DFSHA_MASTER_KEY_1}", DFSHA_TLS_CERT: /certs/dn1.crt, DFSHA_TLS_KEY: /certs/dn1.key }
+    depends_on: [control1, control2, control3]
+  dn2:
+    <<: *app
+    hostname: dn2
+    command: python -m datanode.main
+    volumes: ["./certs:/certs:ro", "dn2:/data"]
+    environment: { <<: *nodeenv, DFSHA_NODE_ID: dn-b, DFSHA_ADVERTISE_HOST: dn2, DFSHA_MASTER_KEY: "${DFSHA_MASTER_KEY_2}", DFSHA_TLS_CERT: /certs/dn2.crt, DFSHA_TLS_KEY: /certs/dn2.key }
+    depends_on: [control1, control2, control3]
+  dn3:
+    <<: *app
+    hostname: dn3
+    command: python -m datanode.main
+    volumes: ["./certs:/certs:ro", "dn3:/data"]
+    environment: { <<: *nodeenv, DFSHA_NODE_ID: dn-c, DFSHA_ADVERTISE_HOST: dn3, DFSHA_MASTER_KEY: "${DFSHA_MASTER_KEY_3}", DFSHA_TLS_CERT: /certs/dn3.crt, DFSHA_TLS_KEY: /certs/dn3.key }
+    depends_on: [control1, control2, control3]
+
+  # ------------------------------------------------------------------ contenedor cliente
+  client:
+    <<: *app
+    hostname: client
+    command: sleep infinity
+    volumes: ["./certs:/certs:ro", "./work:/work"]
+    working_dir: /work
+    environment:
+      DFSHA_CONTROL: https://control1:4430,https://control2:4430,https://control3:4430
+      DFSHA_CA: /certs/ca.crt
+      DFSHA_HOME: /work/.dfsha
+
+volumes: { etcd1: {}, etcd2: {}, etcd3: {}, dn1: {}, dn2: {}, dn3: {} }
